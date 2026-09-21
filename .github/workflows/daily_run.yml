@@ -1,15 +1,17 @@
-name: V9.0 每日动态选股运行
+name: V10.1 每日动态选股运行
 
 on:
   schedule:
-    # 每天北京时间早上 6:30 运行 (UTC时间 22:30，周一至周五)
+    # 每天北京时间早上 6:30 运行
     - cron: '30 22 * * 0-4'
-  workflow_dispatch: # 允许手动点击测试
+  workflow_dispatch: 
 
 jobs:
   build-and-run:
     runs-on: ubuntu-latest
-    timeout-minutes: 120 # 动态抓取数据需要时间，设置最长2小时超时
+    # 必须加上这句，赋予 Actions 写权限，否则无法提交文件
+    permissions:
+      contents: write
 
     steps:
     - name: 检出代码
@@ -25,11 +27,18 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: 运行 V9.0 核心模型
+    - name: 运行 V10.1 核心模型
       run: python main.py
 
-    - name: 上传结果表格
+    # 自动把生成的 xlsx 文件提交回仓库
+    - name: 自动提交并推送 Excel 报表
+      uses: stefanzweifel/git-auto-commit-action@v5
+      with:
+        commit_message: "自动更新选股报告 [skip ci]"
+        file_pattern: "*.xlsx"
+
+    - name: 上传结果表格（作为备用下载渠道）
       uses: actions/upload-artifact@v4
       with:
-        name: V10-Quant-Report
-        path: "*.xlsx"  # 注意这里从 *.csv 改成了 *.xlsx
+        name: V10.1-Quant-Report
+        path: "*.xlsx"
