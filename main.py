@@ -148,13 +148,17 @@ def check_elimination(data):
 
 def send_to_wechat(title, content):
     if "你的SendKey" in SERVERCHAN_KEY: return
-    try: requests.post(f"https://sctapi.ftqq.com/{SERVERCHAN_KEY}.send", data={"title": title, "desp": content}, timeout=10)
-    except Exception as e: print(f"微信推送失败: {e}")
+    try: 
+        requests.post(f"https://sctapi.ftqq.com/{SERVERCHAN_KEY}.send", data={"title": title, "desp": content}, timeout=10)
+    except Exception as e: 
+        print(f"微信推送失败: {e}")
 
 def send_to_feishu(title, content):
     if "你的飞书Webhook" in FEISHU_WEBHOOK: return
-    try: requests.post(FEISHU_WEBHOOK, headers={'Content-Type': 'application/json'}, json={"msg_type": "text", "content": {"text": f"{title}\n\n{content}"}}, timeout=10)
-    except Exception as e: print(f"飞书推送失败: {e}")
+    try: 
+        requests.post(FEISHU_WEBHOOK, headers={'Content-Type': 'application/json'}, json={"msg_type": "text", "content": {"text": f"{title}\n\n{content}"}}, timeout=10)
+    except Exception as e: 
+        print(f"飞书推送失败: {e}")
 
 def main():
     print(f"===== V10.0 全自动AI量化模型启动 | {datetime.now()} =====")
@@ -193,19 +197,20 @@ def main():
     df.to_excel(filename, index=False, engine='openpyxl')
     print(f"表格已生成：{filename}")
     
-    # 构建推送
-    buy_list = df[df['最终判定'] == '✅ 买入']
-    content = f"**V10.0 全自动模型结果** ({datetime.now().strftime('%Y-%m-%d')})\n\n"
-    if len(buy_list) > 0:
-        content += "🎉 **发现以下标的符合买入条件：**\n\n"
-        for _, row in buy_list.iterrows():
-            content += f"- {row['股票名称']} ({row['代码']}) | PR: {row['终极PR']} | 阈值: {row['行业阈值']}\n"
-    else:
-        content += "今日无符合买入条件的标的。\n"
-    content += "\n完整表格请前往 GitHub Actions 下载 Artifacts。"
-
-    send_to_wechat("V10.0 量化选股日报", content)
-    send_to_feishu("V10.0 量化选股日报", content)
+    # 构建推送（将表格转换为可以直接在手机上看的 Markdown 格式）
+    # 用 Markdown 表格替代原来简单的文本
+    content = f"**V10.1 全自动模型结果** ({datetime.now().strftime('%Y-%m-%d')})\n\n"
+    content += "📊 **今日全市场扫描结果：**\n\n"
+    
+    # 将 DataFrame 转为 Markdown 表格
+    content += df.to_markdown(index=False)
+    
+    # 附上 GitHub Actions 的下载链接（如果配置了自动提交）
+    content += "\n\n📥 **点击下载 Excel 原文件：**\n"
+    content += f"https://github.com/你的用户名/Stock-AI-Agent/raw/main/动态选股报告_{datetime.now().strftime('%Y%m%d')}.xlsx"
+    
+    send_to_wechat("V10.1 量化选股日报", content)
+    send_to_feishu("V10.1 量化选股日报", content)
     print("程序运行完毕！")
 
 if __name__ == "__main__":
