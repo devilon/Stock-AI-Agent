@@ -185,30 +185,47 @@ def main():
         time.sleep(2) # 防封禁核心：每次请求间隔2秒
 
     if not results:
-        print("没有获取到任何数据。")
-        sys.exit(0)
+        print("⚠️ 今日未获取到任何有效数据，可能被限流。")
+        # 构造空表，防止后续代码崩溃
+        df = pd.DataFrame(columns=['股票名称', '代码', '市场', '当前PB', '正常化ROE(%)', '股息率(%)', '终极PR', '行业阈值', '排雷通过', '最终判定'])
+    else:
+        df = pd.DataFrame(results)
 
-    df = pd.DataFrame(results)
-    
     # === 解决前导零问题，强制生成 .xlsx 文件 ===
-    # 将代码列转为带引号的文本格式
-    df['代码'] = df['代码'].apply(lambda x: f"'{x}")
+    if not df.empty:
+        df['代码'] = df['代码'].apply(lambda x: f"'{x}")
+    
     filename = f"动态选股报告_{datetime.now().strftime('%Y%m%d')}.xlsx"
-    df.to_excel(filename, index=False, engine='openpyxl')
-    print(f"表格已生成：{filename}")
-    
-    # 构建推送（将表格转换为可以直接在手机上看的 Markdown 格式）
-    # 用 Markdown 表格替代原来简单的文本
+    try:
+        df.to_excel(filename, index=False, engine='openpyxl')
+        print(f"表格已生成：{filename}")
+    except Exception as e:
+        print(f"生成Excel失败: {e}")
+
+    # === 构建手机可读推送内容 ===
     content = f"**V10.1 全自动模型结果** ({datetime.now().strftime('%Y-%m-%d')})\n\n"
-    content += "📊 **今日全市场扫描结果：**\n\n"
     
-    # 将 DataFrame 转为 Markdown 表格
-    content += df.to_markdown(index=False)
-    
-    # 附上 GitHub Actions 的下载链接（如果配置了自动提交）
+    if not df.empty:
+        content += "📊 **今日全市场扫描结果：**\n\n"
+        # 防御性调用 to_markdown
+        try:
+            content += df.to_markdown(index=False)
+        except Exception as e:
+            content += f"表格渲染失败，请下载原文件。\n"
+        
+        buy_list = df[df['最终判定'] == '✅ 买入']
+        if len(buy_list) > 0:
+            content += f"\n\n🎉 **发现 {len(buy_list)} 只符合买入条件的标的！**"
+        else:
+            content += "\n\n今日无符合买入条件的标的。"
+    else:
+        content += "⚠️ 今日未获取到任何数据，请检查数据源。"
+
+    # 下载链接
     content += "\n\n📥 **点击下载 Excel 原文件：**\n"
-    content += f"https://github.com/你的用户名/Stock-AI-Agent/raw/main/动态选股报告_{datetime.now().strftime('%Y%m%d')}.xlsx"
-    
+    # 请把下面的 devilon 换成你自己的 GitHub 用户名
+    content += f"https://github.com/devilon/Stock-AI-Agent/raw/main/{filename}"
+
     send_to_wechat("V10.1 量化选股日报", content)
     send_to_feishu("V10.1 量化选股日报", content)
     print("程序运行完毕！")
