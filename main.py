@@ -137,12 +137,19 @@ def main():
     # dynamic_pool = [{"code": "000651", "name": "格力电器", "market": "A股", "industry": "消费/品牌轻资产"}]
     
     dynamic_pool = fetch_a_stock_pool()
+
+    # ================= 新增备胎机制 =================
     if not dynamic_pool:
-        print("股票池获取失败，程序终止。")
-        sys.exit(0) # 正常退出，避免 Actions 报错
-        
-    # 为了快速测试，只跑前10只股票，实战中全跑需要处理并发和限流
-    sample_pool = dynamic_pool[:2] 
+        print("⚠️ 警告：动态股票池获取失败（海外服务器被反爬或超时），启用备用静态测试池...")
+        # 如果动态抓取失败，使用一个固定的测试池，确保流程能跑完
+        dynamic_pool = [
+            {"code": "000651", "name": "格力电器", "market": "A股", "industry": "消费/品牌轻资产"},
+            {"code": "600036", "name": "招商银行", "market": "A股", "industry": "银行金融"},
+            {"code": "00836", "name": "华润电力", "market": "港股", "industry": "公用事业"},
+        ]
+    # ================================================
+
+    sample_pool = dynamic_pool # 测试阶段直接全跑，不限制数量
     
     results = []
     for stock in sample_pool:
