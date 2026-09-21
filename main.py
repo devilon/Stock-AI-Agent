@@ -16,6 +16,208 @@ INDEX_POOL = [
 ]
 # ==========================================
 
+# 股票池：手动维护一批优质标的，每天自动更新数据
+STOCK_POOL = [
+    # A股（上交所 .SS，深交所 .SZ）
+    {"code": "600519", "name": "贵州茅台", "market": "A_SH", "industry": "消费/品牌轻资产", "threshold": 0.75},
+    {"code": "000651", "name": "格力电器", "market": "A_SZ", "industry": "消费/品牌轻资产", "threshold": 0.75},
+    {"code": "600036", "name": "招商银行", "market": "A_SH", "industry": "银行金融", "threshold": 1.0},
+    {"code": "601088", "name": "中国神华", "market": "A_SH", "industry": "周期能源", "threshold": 0.70},
+    {"code": "600941", "name": "中国移动", "market": "A_SH", "industry": "港口/电信/公用", "threshold": 1.0},
+    # 港股（.HK）
+    {"code": "00836", "name": "华润电力", "market": "HK", "industry": "公用事业", "threshold": 1.0},
+    {"code": "00883", "name": "中国海洋石油", "market": "HK", "industry": "周期能源", "threshold": 0.70},
+    {"code": "00700", "name": "腾讯控股", "market": "HK", "industry": "消费/品牌轻资产", "threshold": 0.75},
+    {"code": "00941", "name": "中国移动", "market": "HK", "industry": "港口/电信/公用", "threshold": 1.0},
+    {"code": "01186", "name": "中国铁建", "market": "HK", "industry": "周期基建", "threshold": 0.70},
+    # 美股
+    {"code": "AAPL", "name": "苹果", "market": "US", "industry": "消费/品牌轻资产", "threshold": 0.75},
+    {"code": "MSFT", "name": "微软", "market": "US", "industry": "消费/品牌轻资产", "threshold": 0.75},
+    {"code": "CVX", "name": "雪佛龙", "market": "US", "industry": "周期能源", "threshold": 0.70},
+    {"code": "PFE", "name": "辉瑞", "market": "US", "industry": "医药制造", "threshold": 0.85},
+    {"code": "BAC", "name": "美国银行", "market": "US", "industry": "银行金融", "threshold": 1.0},
+]
+
+
+def main():
+    print(f"===== V9.3 yfinance真实数据版 | {datetime.now()} =====")
+
+    results = []
+    for stock in STOCK_POOL:
+        print(f"正在分析: {stock['name']} ({stock['code']})")
+        try:
+            data = fetch_yfinance_data(stock['code'], stock['market'])
+            if not data:
+                print(f"  ⚠️ {stock['name']} 数据获取失败，跳过")
+                continue
+
+            data['industry'] = stock['industry']
+            n, m, g, q = get_n_m_g_q_coefficients(data)
+            final_pr = calculate_pr_v8(data['pb'], data['roe'], n, m, g, q)
+            passed = check_elimination(data)
+            threshold = stock['threshold']
+            is_buy = passed and (final_pr <= threshold)
+
+            results.append({
+                '股票名称': stock['name'],
+                '代码': stock['code'],
+                '市场': stock['market'],
+                '当前PB': round(data['pb'], 2),
+                '正常化ROE(%)': round(data['roe'] * 100, 2),
+                '股息率(%)': round(data['dividend_yield'], 2),
+                '终极PR': final_pr,
+                '行业阈值': threshold,
+                '排雷通过': '✅' if passed else '❌',
+                '最终判定': '✅ 买入' if is_buy else '❌ 淘汰'
+            })
+            print(f"  PB={data['pb']:.2f}, ROE={data['roe']*100:.1f}%, PR={final_pr}, 判定={'买入' if is_buy else '淘汰'}")
+            time.sleep(1.5)  # 关键：防止yfinance限流
+
+        except Exception as e:
+            print(f"  ❌ {stock['name']} 处理出错: {e}")
+            continue
+
+    # 生成表格与推送（保持原有逻辑）
+    df = pd.DataFrame(results)
+    columns = ['股票名称', '代码', '市场', '当前PB', '正常化ROE(%)', '股息率(%)', '终极PR', '行业阈值', '排雷通过', '最终判定']
+    if df.empty:
+        df = pd.DataFrame(columns=columns)
+    else:
+        df = df.reindex(columns=columns)
+
+    filename = f"动态选股报告_{datetime.now().strftime('%Y%m%d')}.csv"
+    df.to_csv(filename, index=False, encoding='utf-8-sig')
+    print(f"\n表格已生成：{filename}")
+    print(df.to_string())
+
+    # 推送逻辑保持不变...
+
+def _safe_get(info, key, default=None):
+    """安全获取info字段，避免直接报错"""
+    try:
+        val = info.get(key, default)
+        return val if val is not None else default
+    except Exception:
+        return default
+
+def fetch_yfinance_data(ticker_code, market="US"):
+    """
+    通用数据获取函数，支持美股/港股/A股
+    ticker_code: 纯代码，如 'AAPL', '00836', '000651'
+    market: 'US', 'HK', 'A_SH', 'A_SZ'
+    """
+    # 1. 代码格式转换
+    if market == "HK":
+        ticker = f"{int(ticker_code):04d}.HK"  # 港股补足4位
+    elif market == "A_SH":
+        ticker = f"{ticker_code}.SS"
+    elif market == "A_SZ":
+        ticker = f"{ticker_code}.SZ"
+    else:
+        ticker = ticker_code
+
+    print(f"  正在抓取 {ticker} ...")
+    stock = yf.Ticker(ticker)
+    info = stock.info
+
+    # 2. 基础字段获取（带容错）
+    pb = _safe_get(info, 'priceToBook', 0)
+    roe = _safe_get(info, 'returnOnEquity', 0)  # 小数形式，0.15 = 15%
+    div_yield = _safe_get(info, 'dividendYield', 0)
+    payout = _safe_get(info, 'payoutRatio', 0)
+    debt_to_equity = _safe_get(info, 'debtToEquity', 0)
+    fcf = _safe_get(info, 'freeCashflow', 0)
+    net_income = _safe_get(info, 'netIncomeToCommon', 0)
+    ebitda = _safe_get(info, 'ebitda', 0)
+    total_debt = _safe_get(info, 'totalDebt', 0)
+
+    # 3. 数据清洗与单位统一
+    # ROE: yfinance 返回小数，转为百分比
+    roe_pct = roe * 100 if roe else 0
+    # 股息率: yfinance 可能返回小数(0.03)或百分比(3.0)，统一为百分比
+    div_yield_pct = div_yield * 100 if (div_yield and div_yield < 1) else div_yield
+    # 分红率: 同上
+    payout_pct = payout * 100 if (payout and payout < 1) else payout
+    # 资产负债率: yfinance 返回的是比率，转为百分比
+    # 但注意：debtToEquity 是"负债/权益"，需要换算为"负债/总资产"
+    if debt_to_equity and debt_to_equity > 0:
+        # 负债/权益 = D/E，总资产 = D + E，则 负债率 = D/(D+E) = (D/E) / (1 + D/E)
+        debt_ratio = (debt_to_equity / 100) / (1 + debt_to_equity / 100) * 100
+    else:
+        debt_ratio = 0
+
+    # 4. FCF/NI 计算（避免除零）
+    fcf_ni = fcf / net_income if net_income and net_income != 0 else 1.0
+    # 防止负值，Q系数最低取0.5
+    fcf_ni = max(0.0, fcf_ni)
+
+    # 5. 有息负债/EBITDA
+    debt_ebitda = total_debt / ebitda if ebitda and ebitda > 0 else 99
+
+    # 6. 计算5年ROE标准差（需要历史数据）
+    roe_std = _calc_roe_std(stock)
+
+    # 7. 获取3年利润CAGR
+    profit_cagr = _calc_profit_cagr(stock)
+
+    return {
+        'pb': pb,
+        'roe': roe_pct / 100,  # 保持小数形式，用于公式计算
+        'dividend_ratio': payout_pct,
+        'roe_std': roe_std,
+        'profit_cagr': profit_cagr,
+        'fcf_ni': fcf_ni,
+        'cfo_positive_years': 5,  # 简化：默认为5，后续可升级
+        'dividend_years': 5,      # 简化：默认为5，后续可升级
+        'goodwill_ratio': 5,      # 简化：yfinance不直接提供，后续可从balance_sheet计算
+        'debt_ebitda': debt_ebitda,
+        'dividend_yield': div_yield_pct,
+        'pb_percentile': 50,      # 简化：yfinance不直接提供历史PB分位
+        'revenue_growth': _safe_get(info, 'revenueGrowth', 0) * 100,
+        'debt_ratio': debt_ratio,
+    }
+
+
+def _calc_roe_std(stock, years=5):
+    """计算近5年ROE标准差"""
+    try:
+        financials = stock.financials
+        if financials is None or financials.empty:
+            return 0
+        net_income = financials.loc['Net Income'] if 'Net Income' in financials.index else None
+        # 从balance_sheet获取股东权益
+        bs = stock.balance_sheet
+        if bs is None or bs.empty:
+            return 0
+        equity = bs.loc['Stockholders Equity'] if 'Stockholders Equity' in bs.index else None
+        if net_income is None or equity is None:
+            return 0
+        # 取最近years年的数据
+        roe_series = (net_income / equity).dropna().head(years)
+        if len(roe_series) < 2:
+            return 0
+        return float(roe_series.std())
+    except Exception:
+        return 0
+
+
+def _calc_profit_cagr(stock, years=3):
+    """计算近3年净利润复合增速"""
+    try:
+        financials = stock.financials
+        if financials is None or financials.empty:
+            return 0
+        net_income = financials.loc['Net Income'] if 'Net Income' in financials.index else None
+        if net_income is None or len(net_income) < years + 1:
+            return 0
+        latest = net_income.iloc[0]
+        earliest = net_income.iloc[years]
+        if earliest and earliest > 0 and latest and latest > 0:
+            cagr = ((latest / earliest) ** (1 / years) - 1) * 100
+            return round(cagr, 2)
+        return 0
+    except Exception:
+        return 0
 def calculate_pr_v8(pb, roe, n, m, g, q, s=1.0):
     try:
         if roe <= 0 or pb <= 0 or pd.isna(roe) or pd.isna(pb):
@@ -25,52 +227,6 @@ def calculate_pr_v8(pb, roe, n, m, g, q, s=1.0):
     except Exception:
         return 999
 
-def fetch_a_stock_pool():
-    print("正在获取A股宽基指数成分股...")
-    codes = []
-    try:
-        df300 = ak.index_stock_cons_csindex(symbol="000300")
-        for _, row in df300.iterrows():
-            codes.append({"code": row['成分券代码'], "name": row['成分券名称'], "market": "A股", "industry": "待分类"})
-        print(f"成功获取沪深300成分股：{len(codes)} 只")
-    except Exception as e:
-        print(f"获取沪深300失败: {e}")
-    return codes
-
-def fetch_a_stock_data(code):
-    try:
-        # 获取实时行情（加入重试机制）
-        for _ in range(2):
-            try:
-                df_spot = ak.stock_zh_a_spot_em()
-                stock_info = df_spot[df_spot['代码'] == code].iloc[0]
-                pb = float(stock_info['市净率']) if '市净率' in stock_info else 0
-                break
-            except Exception:
-                time.sleep(2)
-        else:
-            return None
-            
-        # 模拟真实的财务数据获取（这里为了跑通流程用模拟值）
-        # 实战中需要调用 ak.stock_financial_analysis_indicator(symbol=code) 获取真实ROE
-        return {
-            'pb': pb if pb > 0 else 1.0,
-            'roe': 0.15, 
-            'dividend_ratio': 40,
-            'roe_std': 3,
-            'profit_cagr': 6,
-            'fcf_ni': 1.0,
-            'cfo_positive_years': 5,
-            'dividend_years': 5,
-            'goodwill_ratio': 5,
-            'debt_ebitda': 2.0,
-            'dividend_yield': 3.0,
-            'pb_percentile': 20,
-            'revenue_growth': 5,
-        }
-    except Exception as e:
-        print(f"处理股票 {code} 时发生数据错误: {e}")
-        return None
 
 def get_n_m_g_q_coefficients(data):
     try:
@@ -177,7 +333,7 @@ def main():
             '终极PR': final_pr, '行业阈值': threshold,
             '排雷通过': '✅' if passed else '❌', '最终判定': '✅ 买入' if is_buy else '❌ 淘汰'
         })
-        time.sleep(1)
+        time.sleep(1.5)
 
     df = pd.DataFrame(results)
     
@@ -207,86 +363,6 @@ def main():
     send_to_feishu("V9.2 量化选股日报", content)
     print("程序运行完毕！")
 
-
-
-
-
-
-
-# def main():
-#     print(f"===== V9.0 动态选股模型启动 | {datetime.now()} =====")
-    
-#     # 如果你只想测试流程，可以取消下面这行的注释，使用静态池子
-#     # dynamic_pool = [{"code": "000651", "name": "格力电器", "market": "A股", "industry": "消费/品牌轻资产"}]
-    
-#     dynamic_pool = fetch_a_stock_pool()
-
-#     # ================= 新增备胎机制 =================
-#     if not dynamic_pool:
-#         print("⚠️ 警告：动态股票池获取失败（海外服务器被反爬或超时），启用备用静态测试池...")
-#         # 如果动态抓取失败，使用一个固定的测试池，确保流程能跑完
-#         dynamic_pool = [
-#             {"code": "000651", "name": "格力电器", "market": "A股", "industry": "消费/品牌轻资产"},
-#             {"code": "600036", "name": "招商银行", "market": "A股", "industry": "银行金融"},
-#             {"code": "00836", "name": "华润电力", "market": "港股", "industry": "公用事业"},
-#         ]
-#     # ================================================
-
-#     sample_pool = dynamic_pool # 测试阶段直接全跑，不限制数量
-    
-#     results = []
-#     for stock in sample_pool:
-#         print(f"正在分析: {stock['name']} ({stock['code']})")
-#         data = fetch_a_stock_data(stock['code'])
-#         if not data: 
-#             continue
-            
-#         data['industry'] = "消费/品牌轻资产" # 实战需根据行业接口自动分类
-#         n, m, g, q = get_n_m_g_q_coefficients(data)
-#         final_pr = calculate_pr_v8(data['pb'], data['roe'], n, m, g, q)
-#         passed = check_elimination(data)
-        
-#         threshold = 0.75
-#         is_buy = passed and (final_pr <= threshold)
-        
-#         results.append({
-#             '股票名称': stock['name'], '代码': stock['code'], '市场': stock['market'],
-#             '当前PB': round(data['pb'], 2), '正常化ROE(%)': round(data['roe'] * 100, 2),
-#             '终极PR': final_pr, '行业阈值': threshold,
-#             '排雷通过': '✅' if passed else '❌', '最终判定': '✅ 买入' if is_buy else '❌ 淘汰'
-#         })
-#         time.sleep(0.5) # 防封控
-        
-    # df = pd.DataFrame(results)
-       # ================= 新增防弹补丁 =================
-    # 定义标准列名，防止因为数据抓取为空导致 KeyError
-    # columns = ['股票名称', '代码', '市场', '当前PB', '正常化ROE(%)', '终极PR', '行业阈值', '排雷通过', '最终判定']
-    
-    # if df.empty:
-    #     print("警告：今日未获取到任何有效股票数据，可能被反爬或网络超时。")
-    #     df = pd.DataFrame(columns=columns)  # 生成带列名的空表
-    # else:
-    #     # 如果数据没空，确保列顺序一致
-    #     df = df.reindex(columns=columns)
-    # # ================================================
-        
-    # filename = f"动态选股报告_{datetime.now().strftime('%Y%m%d')}.csv"
-    # df.to_csv(filename, index=False, encoding='utf-8-sig')
-    # print(f"表格已生成：{filename}")
-    
-    # buy_list = df[df['最终判定'] == '✅ 买入']
-    # content = f"**V9.0 动态模型运行结果** ({datetime.now().strftime('%Y-%m-%d')})\n\n"
-    # if len(buy_list) > 0:
-    #     content += "🎉 **发现以下标的符合买入条件：**\n\n"
-    #     for _, row in buy_list.iterrows():
-    #         content += f"- {row['股票名称']} ({row['代码']}) | PR: {row['终极PR']} | 阈值: {row['行业阈值']}\n"
-    # else:
-    #     content += "今日无符合买入条件的标的，请耐心等待。\n"
-    # content += "\n完整表格请前往 GitHub Actions 下载 Artifacts。"
-
-    # send_to_wechat("V9.0 量化选股日报", content)
-    # send_to_feishu("V9.0 量化选股日报", content)
-    # print("程序运行完毕！")
 
 if __name__ == "__main__":
     main()
