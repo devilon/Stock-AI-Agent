@@ -31,5 +31,5 @@ jobs:
     - name: 上传结果表格
       uses: actions/upload-artifact@v4
       with:
-        name: Dynamic-Stock-Report
-        path: "*.csv"
+        name: V10-Quant-Report
+        path: "*.xlsx"  # 注意这里从 *.csv 改成了 *.xlsx
