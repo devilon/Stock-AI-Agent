@@ -131,39 +131,44 @@ def send_to_feishu(title, content):
         print(f"飞书推送失败: {e}")
 
 def main():
-    print(f"===== V9.0 动态选股模型启动 | {datetime.now()} =====")
+    print(f"===== V9.2 隔离测试模型启动 | {datetime.now()} =====")
     
-    # 如果你只想测试流程，可以取消下面这行的注释，使用静态池子
-    # dynamic_pool = [{"code": "000651", "name": "格力电器", "market": "A股", "industry": "消费/品牌轻资产"}]
+    # 强制使用静态测试池，彻底跳过抓取A股指数
+    dynamic_pool = [
+        {"code": "000651", "name": "格力电器", "market": "A股", "industry": "消费/品牌轻资产"},
+        {"code": "600036", "name": "招商银行", "market": "A股", "industry": "银行金融"},
+        {"code": "00836", "name": "华润电力", "market": "港股", "industry": "公用事业"},
+    ]
     
-    dynamic_pool = fetch_a_stock_pool()
-
-    # ================= 新增备胎机制 =================
-    if not dynamic_pool:
-        print("⚠️ 警告：动态股票池获取失败（海外服务器被反爬或超时），启用备用静态测试池...")
-        # 如果动态抓取失败，使用一个固定的测试池，确保流程能跑完
-        dynamic_pool = [
-            {"code": "000651", "name": "格力电器", "market": "A股", "industry": "消费/品牌轻资产"},
-            {"code": "600036", "name": "招商银行", "market": "A股", "industry": "银行金融"},
-            {"code": "00836", "name": "华润电力", "market": "港股", "industry": "公用事业"},
-        ]
-    # ================================================
-
-    sample_pool = dynamic_pool # 测试阶段直接全跑，不限制数量
-    
+    sample_pool = dynamic_pool
     results = []
+    
     for stock in sample_pool:
         print(f"正在分析: {stock['name']} ({stock['code']})")
-        data = fetch_a_stock_data(stock['code'])
-        if not data: 
-            continue
-            
-        data['industry'] = "消费/品牌轻资产" # 实战需根据行业接口自动分类
+        
+        # 注入模拟的财务数据，让流程能跑通
+        data = {
+            'pb': 1.44 if stock['name'] == '格力电器' else (0.84 if stock['name'] == '招商银行' else 0.80),
+            'roe': 0.18 if stock['name'] == '格力电器' else (0.13 if stock['name'] == '招商银行' else 0.0977),
+            'dividend_ratio': 50,
+            'roe_std': 3,
+            'profit_cagr': 6,
+            'fcf_ni': 1.0,
+            'cfo_positive_years': 5,
+            'dividend_years': 5,
+            'goodwill_ratio': 5,
+            'debt_ebitda': 1.5 if stock['name'] == '格力电器' else 3.0,
+            'dividend_yield': 8.0 if stock['name'] == '格力电器' else 5.2,
+            'pb_percentile': 10,
+            'revenue_growth': 5,
+        }
+        
+        data['industry'] = stock['industry']
         n, m, g, q = get_n_m_g_q_coefficients(data)
         final_pr = calculate_pr_v8(data['pb'], data['roe'], n, m, g, q)
         passed = check_elimination(data)
         
-        threshold = 0.75
+        threshold = 0.75 if "消费" in stock['industry'] else (1.0 if "银行" in stock['industry'] or "公用" in stock['industry'] else 0.70)
         is_buy = passed and (final_pr <= threshold)
         
         results.append({
@@ -172,38 +177,116 @@ def main():
             '终极PR': final_pr, '行业阈值': threshold,
             '排雷通过': '✅' if passed else '❌', '最终判定': '✅ 买入' if is_buy else '❌ 淘汰'
         })
-        time.sleep(0.5) # 防封控
-        
+        time.sleep(1)
+
     df = pd.DataFrame(results)
-       # ================= 新增防弹补丁 =================
-    # 定义标准列名，防止因为数据抓取为空导致 KeyError
-    columns = ['股票名称', '代码', '市场', '当前PB', '正常化ROE(%)', '终极PR', '行业阈值', '排雷通过', '最终判定']
     
+    # 防弹补丁
+    columns = ['股票名称', '代码', '市场', '当前PB', '正常化ROE(%)', '终极PR', '行业阈值', '排雷通过', '最终判定']
     if df.empty:
-        print("警告：今日未获取到任何有效股票数据，可能被反爬或网络超时。")
-        df = pd.DataFrame(columns=columns)  # 生成带列名的空表
+        df = pd.DataFrame(columns=columns) 
     else:
-        # 如果数据没空，确保列顺序一致
         df = df.reindex(columns=columns)
-    # ================================================
-        
+
     filename = f"动态选股报告_{datetime.now().strftime('%Y%m%d')}.csv"
     df.to_csv(filename, index=False, encoding='utf-8-sig')
     print(f"表格已生成：{filename}")
     
+    # 构建推送内容
     buy_list = df[df['最终判定'] == '✅ 买入']
-    content = f"**V9.0 动态模型运行结果** ({datetime.now().strftime('%Y-%m-%d')})\n\n"
+    content = f"**V9.2 隔离测试结果** ({datetime.now().strftime('%Y-%m-%d')})\n\n"
     if len(buy_list) > 0:
         content += "🎉 **发现以下标的符合买入条件：**\n\n"
         for _, row in buy_list.iterrows():
             content += f"- {row['股票名称']} ({row['代码']}) | PR: {row['终极PR']} | 阈值: {row['行业阈值']}\n"
     else:
-        content += "今日无符合买入条件的标的，请耐心等待。\n"
-    content += "\n完整表格请前往 GitHub Actions 下载 Artifacts。"
+        content += "今日无符合买入条件的标的。\n"
+    content += "\n完整表格请查看 GitHub Actions 的 Artifacts 下载。"
 
-    send_to_wechat("V9.0 量化选股日报", content)
-    send_to_feishu("V9.0 量化选股日报", content)
+    send_to_wechat("V9.2 量化选股日报", content)
+    send_to_feishu("V9.2 量化选股日报", content)
     print("程序运行完毕！")
+
+
+
+
+
+
+
+# def main():
+#     print(f"===== V9.0 动态选股模型启动 | {datetime.now()} =====")
+    
+#     # 如果你只想测试流程，可以取消下面这行的注释，使用静态池子
+#     # dynamic_pool = [{"code": "000651", "name": "格力电器", "market": "A股", "industry": "消费/品牌轻资产"}]
+    
+#     dynamic_pool = fetch_a_stock_pool()
+
+#     # ================= 新增备胎机制 =================
+#     if not dynamic_pool:
+#         print("⚠️ 警告：动态股票池获取失败（海外服务器被反爬或超时），启用备用静态测试池...")
+#         # 如果动态抓取失败，使用一个固定的测试池，确保流程能跑完
+#         dynamic_pool = [
+#             {"code": "000651", "name": "格力电器", "market": "A股", "industry": "消费/品牌轻资产"},
+#             {"code": "600036", "name": "招商银行", "market": "A股", "industry": "银行金融"},
+#             {"code": "00836", "name": "华润电力", "market": "港股", "industry": "公用事业"},
+#         ]
+#     # ================================================
+
+#     sample_pool = dynamic_pool # 测试阶段直接全跑，不限制数量
+    
+#     results = []
+#     for stock in sample_pool:
+#         print(f"正在分析: {stock['name']} ({stock['code']})")
+#         data = fetch_a_stock_data(stock['code'])
+#         if not data: 
+#             continue
+            
+#         data['industry'] = "消费/品牌轻资产" # 实战需根据行业接口自动分类
+#         n, m, g, q = get_n_m_g_q_coefficients(data)
+#         final_pr = calculate_pr_v8(data['pb'], data['roe'], n, m, g, q)
+#         passed = check_elimination(data)
+        
+#         threshold = 0.75
+#         is_buy = passed and (final_pr <= threshold)
+        
+#         results.append({
+#             '股票名称': stock['name'], '代码': stock['code'], '市场': stock['market'],
+#             '当前PB': round(data['pb'], 2), '正常化ROE(%)': round(data['roe'] * 100, 2),
+#             '终极PR': final_pr, '行业阈值': threshold,
+#             '排雷通过': '✅' if passed else '❌', '最终判定': '✅ 买入' if is_buy else '❌ 淘汰'
+#         })
+#         time.sleep(0.5) # 防封控
+        
+    # df = pd.DataFrame(results)
+       # ================= 新增防弹补丁 =================
+    # 定义标准列名，防止因为数据抓取为空导致 KeyError
+    # columns = ['股票名称', '代码', '市场', '当前PB', '正常化ROE(%)', '终极PR', '行业阈值', '排雷通过', '最终判定']
+    
+    # if df.empty:
+    #     print("警告：今日未获取到任何有效股票数据，可能被反爬或网络超时。")
+    #     df = pd.DataFrame(columns=columns)  # 生成带列名的空表
+    # else:
+    #     # 如果数据没空，确保列顺序一致
+    #     df = df.reindex(columns=columns)
+    # # ================================================
+        
+    # filename = f"动态选股报告_{datetime.now().strftime('%Y%m%d')}.csv"
+    # df.to_csv(filename, index=False, encoding='utf-8-sig')
+    # print(f"表格已生成：{filename}")
+    
+    # buy_list = df[df['最终判定'] == '✅ 买入']
+    # content = f"**V9.0 动态模型运行结果** ({datetime.now().strftime('%Y-%m-%d')})\n\n"
+    # if len(buy_list) > 0:
+    #     content += "🎉 **发现以下标的符合买入条件：**\n\n"
+    #     for _, row in buy_list.iterrows():
+    #         content += f"- {row['股票名称']} ({row['代码']}) | PR: {row['终极PR']} | 阈值: {row['行业阈值']}\n"
+    # else:
+    #     content += "今日无符合买入条件的标的，请耐心等待。\n"
+    # content += "\n完整表格请前往 GitHub Actions 下载 Artifacts。"
+
+    # send_to_wechat("V9.0 量化选股日报", content)
+    # send_to_feishu("V9.0 量化选股日报", content)
+    # print("程序运行完毕！")
 
 if __name__ == "__main__":
     main()
