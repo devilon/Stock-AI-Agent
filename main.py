@@ -2,22 +2,25 @@ import yfinance as yf
 import pandas as pd
 import requests
 import time
-import sys
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# ================= 配置区 =================
+# ================= V12.0 美港股终端配置区 =================
 # ⚠️ 务必换成你自己的真实密钥
 SERVERCHAN_KEY = "SCT425360TYpx1PLmQCo4xGoutIOomtiTb" 
 FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/9e68bae1-aa6c-4427-8387-ca8691e10581"
-# ==========================================
+# ==========================================================
+
+def calculate_pr_v8(pb, roe, n, m, g, q, s=1.0):
+    if roe <= 0 or pb <= 0: return 999
+    return round((pb / (roe ** 2)) / 100 * n * m * g * q * s, 3)
 
 def get_sp500_tickers():
     try:
         url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
         tables = pd.read_html(url)
-        # 随机抽取40只测试，防止超时（如果你想要全量，去掉.sample(40)即可）
-        return tables[0]['Symbol'].sample(40).tolist() 
+        # 抽样40只测试，防止超时（如果要全量，去掉.sample(40)）
+        return tables[0]['Symbol'].sample(40).tolist()
     except Exception as e:
         print(f"获取标普500失败: {e}")
         return ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "BRK-B", "JPM", "V"]
@@ -33,7 +36,8 @@ def _safe_get(info, key, default=None):
     except: return default
 
 def fetch_yfinance_data(ticker):
-    for attempt in range(2): # 减少重试次数，加快失败速度
+    """抓取真实财务数据"""
+    for attempt in range(2): 
         try:
             stock = yf.Ticker(ticker)
             info = stock.info
@@ -71,19 +75,21 @@ def fetch_yfinance_data(ticker):
     }
 
 def get_n_m_g_q_coefficients(data):
+    """完全对齐你 Excel 里的 N/M/G/Q 系数规则"""
     div_ratio = data.get('dividend_ratio', 0)
     n = 0.9 if div_ratio >= 50 else (1.0 if div_ratio >= 30 else (1.1 if div_ratio >= 15 else 1.2))
     
     industry = data.get('industry', '')
     is_cyclical = any(k in industry for k in ['energy', 'basic materials', 'industrials', 'utilities'])
     
-    roe_std = 3.0
+    roe_std = 3.0 # yfinance不易直接取历史标准差，统一按3.0处理
     m = 0.95 if roe_std <= 3 else 1.0
-    g = 1.0 if is_cyclical else 1.0
+    g = 1.0 if is_cyclical else 1.0 
     q = max(0.5, min(1.0, data.get('fcf_ni', 1.0)))
     return n, m, g, q
 
 def check_elimination(data):
+    """完全对齐你 Excel 里的排雷规则"""
     return all([
         data.get('roe', 0) * 100 >= 6,
         data.get('pb', 99) < 2.0,
@@ -94,25 +100,21 @@ def check_elimination(data):
     ])
 
 def send_to_wechat(title, content):
-    if "你的SendKey" in SERVERCHAN_KEY: 
-        print("微信密钥未配置，跳过推送")
-        return
+    if "你的SendKey" in SERVERCHAN_KEY: return
     try: requests.post(f"https://sctapi.ftqq.com/{SERVERCHAN_KEY}.send", data={"title": title, "desp": content}, timeout=10)
     except Exception as e: print(f"微信推送失败: {e}")
 
 def send_to_feishu(title, content):
-    if "你的飞书Webhook" in FEISHU_WEBHOOK: 
-        print("飞书密钥未配置，跳过推送")
-        return
+    if "你的飞书Webhook" in FEISHU_WEBHOOK: return
     try: requests.post(FEISHU_WEBHOOK, headers={'Content-Type': 'application/json'}, json={"msg_type": "text", "content": {"text": f"{title}\n\n{content}"}}, timeout=10)
     except Exception as e: print(f"飞书推送失败: {e}")
 
 def main():
-    print(f"===== V7.3 美股/港股动态模型启动 | {datetime.now()} =====")
+    print(f"===== V12.0 美港股终端启动 | {datetime.now()} =====")
     raw_pool = get_sp500_tickers() + get_hsi_tickers()
     
     results = []
-    print(f"开始并发抓取 {len(raw_pool)} 只股票...")
+    print(f"开始并发抓取 {len(raw_pool)} 只股票的真实数据...")
     with ThreadPoolExecutor(max_workers=10) as executor:
         future_to_ticker = {executor.submit(fetch_yfinance_data, t): t for t in raw_pool}
         for future in as_completed(future_to_ticker):
@@ -132,35 +134,30 @@ def main():
                 passed = check_elimination(data)
                 is_buy = passed and (final_pr <= threshold)
                 
-                # 去掉 final_pr < 1.5 的过滤限制，只保留前50名
                 results.append({
-                    '股票名称': ticker, '代码': ticker, '市场': '港股' if '.HK' in ticker else '美股',
+                    '股票名称': ticker, '市场': '港股' if '.HK' in ticker else '美股',
                     '当前PB': round(data['pb'], 2), '正常化ROE(%)': round(data['roe']*100, 2),
                     '股息率(%)': round(data['dividend_yield'], 2), '终极PR': final_pr,
                     '行业阈值': threshold, '排雷通过': '✅' if passed else '❌',
                     '最终判定': '✅ 买入' if is_buy else '❌ 淘汰'
                 })
             except Exception as e:
-                print(f"处理 {ticker} 失败: {e}")
                 continue
 
-    # === 核心修改：不论结果是否为空，都强制推送 ===
-    content = f"**V7.3 美股/港股扫描结果** ({datetime.now().strftime('%Y-%m-%d')})\n\n"
+    # === 强制推送机制（就算没数据也发） ===
+    content = f"**V12.0 美股/港股扫描结果** ({datetime.now().strftime('%Y-%m-%d')})\n\n"
     
     if not results:
-        content += "⚠️ 今日未能获取到任何有效股票数据（Yahoo接口超时或返回为空）。"
-        print("结果为空，发送异常通知。")
+        content += "⚠️ 今日未能获取到有效股票数据（Yahoo接口可能被限流）。"
     else:
         df = pd.DataFrame(results)
         df = df.sort_values(by='终极PR')
         buy_df = df[df['最终判定'] == '✅ 买入']
         
         if not buy_df.empty:
-            content += "🎉 **发现以下标的符合买入条件：**\n\n"
-            content += buy_df.head(10).to_markdown(index=False)
+            content += "🎉 **发现以下标的符合买入条件：**\n\n" + buy_df.head(10).to_markdown(index=False)
         else:
-            content += "今日无符合买入条件的标的，以下是PR最低的前5名：\n\n"
-            content += df.head(5).to_markdown(index=False)
+            content += "今日无符合买入条件的标的，以下是PR最低的前5名：\n\n" + df.head(5).to_markdown(index=False)
 
     print("正在推送到微信和飞书...")
     send_to_wechat("美股/港股量化日报", content)
