@@ -7,8 +7,8 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ================= 配置区 =================
-SERVERCHAN_KEY = "你的SendKey填在这里" 
-FEISHU_WEBHOOK = "你的飞书Webhook填在这里"
+SERVERCHAN_KEY = "SCT425360TYpx1PLmQCo4xGoutIOomtiTb" 
+FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/9e68bae1-aa6c-4427-8387-ca8691e10581"
 # ==========================================
 
 def get_sp500_tickers():
