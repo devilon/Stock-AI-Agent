@@ -3,7 +3,7 @@ name: V10.1 每日动态选股运行
 on:
   schedule:
     # 每天北京时间早上 6:30 运行
-    - cron: '30 22 * * 0-4'
+     - cron: '30 2 * * 1-5'
   workflow_dispatch: 
 
 jobs:
